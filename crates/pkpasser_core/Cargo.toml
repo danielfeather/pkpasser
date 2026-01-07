@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 openssl = "0.10.75"
+thiserror = "2.0.17"
+anyhow = "1.0.100"

@@ -2,9 +2,15 @@
 //!
 //! Provides structs and utilities for boilerplating and signing .pkpass files
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    fmt::Write,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,8 +81,53 @@ pub struct AuxiliaryFieldContent {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PassFieldContent {}
 
-pub struct Manifest(HashMap<String, String>);
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Manifest(HashMap<PathBuf, String>);
+
+#[derive(Debug, Error)]
+#[error("CreateManifestError")]
+pub enum CreateManifestError {
+    NotADirectory,
+}
 
 impl Manifest {
-    pub fn from_dir() {}
+    /// Create a manifest from a directory by hashing all files
+    /// recursively in a directory
+    pub fn from_dir(dir: &Path) -> Result<Self, anyhow::Error> {
+        if !dir.is_dir() {
+            return Err(CreateManifestError::NotADirectory.into());
+        }
+
+        let mut hash_table = HashMap::new();
+
+        for entry in fs::read_dir(dir).map_err(|e| e)? {
+            let entry = entry?;
+
+            let path = entry.path();
+
+            if !path.is_dir() {
+                let mut content = std::fs::File::open(path)?;
+
+                let mut buf = Vec::new();
+
+                content.read_to_end(&mut buf)?;
+
+                let sha = openssl::sha::sha1(&buf);
+
+                let mut hash = String::with_capacity(20);
+
+                for byte in sha {
+                    write!(&mut hash, "{byte:x}")?;
+                }
+
+                hash_table.insert(entry.path(), hash);
+
+                continue;
+            }
+
+            hash_table.insert(entry.path(), String::new());
+        }
+
+        Ok(Self(hash_table))
+    }
 }
