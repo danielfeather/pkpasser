@@ -88,46 +88,71 @@ pub struct Manifest(HashMap<PathBuf, String>);
 #[error("CreateManifestError")]
 pub enum CreateManifestError {
     NotADirectory,
+    FormattingError(std::fmt::Error),
+    IoError(std::io::Error),
 }
 
 impl Manifest {
     /// Create a manifest from a directory by hashing all files
     /// recursively in a directory
-    pub fn from_dir(dir: &Path) -> Result<Self, anyhow::Error> {
+    pub fn from_dir(dir: &Path) -> Result<Self, CreateManifestError> {
         if !dir.is_dir() {
             return Err(CreateManifestError::NotADirectory.into());
         }
 
         let mut hash_table = HashMap::new();
 
-        for entry in fs::read_dir(dir).map_err(|e| e)? {
-            let entry = entry?;
+        for entry in walk_dir(dir, 1, 2).map_err(|e| CreateManifestError::IoError(e))? {
+            let path = entry
+                .strip_prefix(dir)
+                .expect("Something gone horrendoesly wrong here");
 
-            let path = entry.path();
+            let mut content =
+                std::fs::File::open(path).map_err(|e| CreateManifestError::IoError(e))?;
 
-            if !path.is_dir() {
-                let mut content = std::fs::File::open(path)?;
+            let mut buf = Vec::new();
 
-                let mut buf = Vec::new();
+            content
+                .read_to_end(&mut buf)
+                .map_err(|e| CreateManifestError::IoError(e))?;
 
-                content.read_to_end(&mut buf)?;
+            let sha = openssl::sha::sha1(&buf);
 
-                let sha = openssl::sha::sha1(&buf);
+            let mut hash = String::with_capacity(40);
 
-                let mut hash = String::with_capacity(20);
-
-                for byte in sha {
-                    write!(&mut hash, "{byte:x}")?;
-                }
-
-                hash_table.insert(entry.path(), hash);
-
-                continue;
+            for byte in sha {
+                write!(&mut hash, "{byte:x}")
+                    .map_err(|e| CreateManifestError::FormattingError(e))?;
             }
 
-            hash_table.insert(entry.path(), String::new());
+            hash_table.insert(path.to_owned(), hash);
         }
 
         Ok(Self(hash_table))
     }
+}
+
+fn walk_dir(dir: &Path, current_depth: u8, max_depth: u8) -> std::io::Result<Vec<PathBuf>> {
+    let mut vec: Vec<PathBuf> = vec![];
+
+    for maybe_entry in fs::read_dir(dir)? {
+        let entry = maybe_entry?;
+
+        let path = entry.path();
+
+        if !path.is_dir() {
+            vec.push(path);
+            continue;
+        }
+
+        if path.is_dir() && current_depth != max_depth {
+            let mut paths = walk_dir(&path, current_depth + 1, max_depth)?;
+
+            for path in paths.drain(0..) {
+                vec.push(path)
+            }
+        }
+    }
+
+    Ok(vec)
 }
